@@ -74,12 +74,13 @@ class B2Client:
                 'local_path': str(local_path)
             }
             
-            uploaded_file = self.bucket.upload(
-                data_bytes=local_path.read_bytes(),
-                file_name=remote_path,
+            # Use the correct B2 SDK v2 API
+            file_data = local_path.read_bytes()
+            uploaded_file = self.bucket.upload_bytes(
+                file_data,
+                remote_path,
                 content_type=self._get_content_type(local_path),
-                file_infos=file_info,
-                sha1_hash=file_hash
+                file_info=file_info
             )
             
             logger.info(f"Successfully uploaded: {local_path} -> {remote_path}")
@@ -99,18 +100,18 @@ class B2Client:
             # Ensure local directory exists
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Download the file
-            download_dest = self.bucket.download_file_by_name(remote_path)
-            
-            # Write to local file
-            with open(local_path, 'wb') as f:
-                download_dest.save(f)
+            # Download the file using the correct B2 SDK v2 API
+            with open(local_path, 'wb') as local_file:
+                download_dest = self.bucket.download_file_by_name(remote_path, local_file)
             
             # Set modification time if available
-            file_info = download_dest.file_info
-            if 'src_last_modified_millis' in file_info:
-                mod_time = int(file_info['src_last_modified_millis']) / 1000
-                os.utime(local_path, (mod_time, mod_time))
+            try:
+                file_info = download_dest.response.file_info
+                if 'src_last_modified_millis' in file_info:
+                    mod_time = int(file_info['src_last_modified_millis']) / 1000
+                    os.utime(local_path, (mod_time, mod_time))
+            except (AttributeError, KeyError, ValueError) as e:
+                logger.debug(f"Could not set modification time for {local_path}: {e}")
             
             logger.info(f"Successfully downloaded: {remote_path} -> {local_path}")
             return True

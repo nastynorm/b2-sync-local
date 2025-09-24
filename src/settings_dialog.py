@@ -9,7 +9,8 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget,
     QLineEdit, QSpinBox, QCheckBox, QPushButton, QFileDialog,
-    QLabel, QGroupBox, QComboBox, QTextEdit, QMessageBox
+    QLabel, QGroupBox, QComboBox, QTextEdit, QMessageBox,
+    QRadioButton, QButtonGroup
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -148,6 +149,38 @@ class SettingsDialog(QDialog):
         sync_layout.addRow(self.sync_hidden_check)
         
         layout.addWidget(sync_group)
+        
+        # Sync Direction Group
+        direction_group = QGroupBox("Sync Direction")
+        direction_layout = QVBoxLayout(direction_group)
+        
+        self.direction_radio_group = QButtonGroup()
+        
+        self.bidirectional_radio = QRadioButton("Bidirectional (Upload & Download)")
+        self.bidirectional_radio.setToolTip("Sync files in both directions between local folder and B2 bucket")
+        direction_layout.addWidget(self.bidirectional_radio)
+        self.direction_radio_group.addButton(self.bidirectional_radio, 0)
+        
+        self.upload_only_radio = QRadioButton("Upload Only")
+        self.upload_only_radio.setToolTip("Only upload files from local folder to B2 bucket")
+        direction_layout.addWidget(self.upload_only_radio)
+        self.direction_radio_group.addButton(self.upload_only_radio, 1)
+        
+        self.download_only_radio = QRadioButton("Download Only")
+        self.download_only_radio.setToolTip("Only download files from B2 bucket to local folder")
+        direction_layout.addWidget(self.download_only_radio)
+        self.direction_radio_group.addButton(self.download_only_radio, 2)
+        
+        # Set current direction
+        current_direction = self.config.get_sync_direction()
+        if current_direction == 'bidirectional':
+            self.bidirectional_radio.setChecked(True)
+        elif current_direction == 'upload_only':
+            self.upload_only_radio.setChecked(True)
+        elif current_direction == 'download_only':
+            self.download_only_radio.setChecked(True)
+        
+        layout.addWidget(direction_group)
         
         layout.addStretch()
         
@@ -339,6 +372,14 @@ class SettingsDialog(QDialog):
             self.config.set_auto_sync(self.auto_sync_check.isChecked())
             self.config.set_sync_interval(self.sync_interval_spin.value())
             self.config.set_sync_hidden_files(self.sync_hidden_check.isChecked())
+            
+            # Save sync direction
+            if self.bidirectional_radio.isChecked():
+                self.config.set_sync_direction('bidirectional')
+            elif self.upload_only_radio.isChecked():
+                self.config.set_sync_direction('upload_only')
+            elif self.download_only_radio.isChecked():
+                self.config.set_sync_direction('download_only')
             
             # Save app settings
             self.config.set_start_with_windows(self.start_with_windows_check.isChecked())

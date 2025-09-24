@@ -117,24 +117,57 @@ class SyncEngine:
     
     def start(self):
         """Start the sync engine"""
-        if not self.b2_client.is_authenticated():
-            if not self.b2_client.authenticate():
-                logger.error("Cannot start sync engine - B2 authentication failed")
+        try:
+            logger.info("Starting sync engine...")
+            
+            # Check B2 authentication
+            if not self.b2_client.is_authenticated():
+                logger.info("B2 client not authenticated, attempting authentication...")
+                try:
+                    if not self.b2_client.authenticate():
+                        logger.error("Cannot start sync engine - B2 authentication failed")
+                        self._notify_status_change(SyncStatus.ERROR)
+                        return False
+                except Exception as e:
+                    logger.error(f"B2 authentication error: {e}")
+                    self._notify_status_change(SyncStatus.ERROR)
+                    return False
+            
+            logger.info("B2 authentication successful")
+            
+            # Start file monitoring with error handling
+            try:
+                self.file_monitor.start_monitoring()
+                logger.info("File monitoring started")
+            except Exception as e:
+                logger.error(f"Failed to start file monitoring: {e}")
                 self._notify_status_change(SyncStatus.ERROR)
                 return False
-        
-        # Start file monitoring
-        self.file_monitor.start_monitoring()
-        
-        # Start auto-sync if enabled
-        if self.config.get_auto_sync():
-            self._start_auto_sync()
-        
-        # Perform initial sync
-        self.sync_now()
-        
-        logger.info("Sync engine started")
-        return True
+            
+            # Start auto-sync if enabled
+            if self.config.get_auto_sync():
+                try:
+                    self._start_auto_sync()
+                    logger.info("Auto-sync started")
+                except Exception as e:
+                    logger.error(f"Failed to start auto-sync: {e}")
+                    # Continue without auto-sync
+            
+            # Perform initial sync with error handling
+            try:
+                self.sync_now()
+                logger.info("Initial sync triggered")
+            except Exception as e:
+                logger.error(f"Failed to trigger initial sync: {e}")
+                # Continue running even if initial sync fails
+            
+            logger.info("Sync engine started successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Critical error starting sync engine: {e}", exc_info=True)
+            self._notify_status_change(SyncStatus.ERROR)
+            return False
     
     def stop(self):
         """Stop the sync engine"""
@@ -291,6 +324,7 @@ class SyncEngine:
                               remote_files: Dict[str, FileInfo]) -> List[Tuple[SyncAction, str, FileInfo]]:
         """Determine what sync actions need to be performed"""
         actions = []
+        sync_direction = self.config.get_sync_direction()
         
         all_files = set(local_files.keys()) | set(remote_files.keys())
         
@@ -304,30 +338,49 @@ class SyncEngine:
                     # Files are identical, skip
                     actions.append((SyncAction.SKIP, file_path, local_file))
                 elif local_file.modified_time > remote_file.modified_time:
-                    # Local file is newer, upload
-                    actions.append((SyncAction.UPLOAD, file_path, local_file))
+                    # Local file is newer
+                    if sync_direction in ['bidirectional', 'upload_only']:
+                        actions.append((SyncAction.UPLOAD, file_path, local_file))
+                    else:
+                        actions.append((SyncAction.SKIP, file_path, local_file))
                 elif remote_file.modified_time > local_file.modified_time:
-                    # Remote file is newer, download
-                    actions.append((SyncAction.DOWNLOAD, file_path, remote_file))
+                    # Remote file is newer
+                    if sync_direction in ['bidirectional', 'download_only']:
+                        actions.append((SyncAction.DOWNLOAD, file_path, remote_file))
+                    else:
+                        actions.append((SyncAction.SKIP, file_path, local_file))
                 else:
                     # Same modification time but different content - conflict
                     actions.append((SyncAction.CONFLICT, file_path, local_file))
             
             elif local_file and not remote_file:
-                # File only exists locally, upload
-                actions.append((SyncAction.UPLOAD, file_path, local_file))
+                # File only exists locally
+                if sync_direction in ['bidirectional', 'upload_only']:
+                    actions.append((SyncAction.UPLOAD, file_path, local_file))
+                else:
+                    actions.append((SyncAction.SKIP, file_path, local_file))
             
             elif remote_file and not local_file:
-                # File only exists remotely, download
-                actions.append((SyncAction.DOWNLOAD, file_path, remote_file))
+                # File only exists remotely
+                if sync_direction in ['bidirectional', 'download_only']:
+                    actions.append((SyncAction.DOWNLOAD, file_path, remote_file))
+                else:
+                    actions.append((SyncAction.SKIP, file_path, remote_file))
         
         return actions
     
     def _execute_sync_actions(self, actions: List[Tuple[SyncAction, str, FileInfo]]):
         """Execute the determined sync actions"""
+        sync_direction = self.config.get_sync_direction()
+        
         for action, file_path, file_info in actions:
             if self.stop_event.is_set():
                 break
+            
+            # Additional protection: Skip DELETE_LOCAL actions in upload-only mode
+            if action == SyncAction.DELETE_LOCAL and sync_direction == 'upload_only':
+                logger.info(f"Skipping DELETE_LOCAL action in upload-only mode: {file_path}")
+                continue
             
             try:
                 if action == SyncAction.UPLOAD:
@@ -373,6 +426,13 @@ class SyncEngine:
     
     def _delete_local_file(self, file_path: str):
         """Delete a local file"""
+        # Prevent local file deletions in upload-only mode
+        sync_direction = self.config.get_sync_direction()
+        if sync_direction == 'upload_only':
+            logger.info(f"Skipping local file deletion in upload-only mode: {file_path}")
+            self._notify_sync_event(SyncAction.DELETE_LOCAL, file_path, True, "Skipped - upload-only mode")
+            return
+        
         local_path = self.file_monitor.get_absolute_path(file_path)
         
         try:
@@ -432,4 +492,19 @@ class SyncEngine:
             'bytes_downloaded': 0,
             'conflicts': 0,
             'errors': 0
+        }
+    
+    def is_local_deletion_protected(self) -> bool:
+        """Check if local file deletions are protected (upload-only mode)"""
+        return self.config.get_sync_direction() == 'upload_only'
+    
+    def get_protection_info(self) -> Dict[str, bool]:
+        """Get information about current file protection settings"""
+        sync_direction = self.config.get_sync_direction()
+        return {
+            'local_deletion_protected': sync_direction == 'upload_only',
+            'remote_deletion_protected': sync_direction == 'download_only',
+            'bidirectional_sync': sync_direction == 'bidirectional',
+            'upload_only': sync_direction == 'upload_only',
+            'download_only': sync_direction == 'download_only'
         }

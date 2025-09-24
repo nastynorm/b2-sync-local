@@ -125,7 +125,7 @@ class SystemTrayApp:
         from PyQt5.QtCore import Qt
         
         # Create a simple icon using Qt directly
-        size = 64
+        size = 80  # Increased from 64 to make icon slightly bigger
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.transparent)
         
@@ -148,11 +148,11 @@ class SystemTrayApp:
         painter.setBrush(brush)
         painter.setPen(QPen(Qt.NoPen))
         
-        # Draw cloud-like shape
-        painter.drawEllipse(10, 20, 25, 20)
-        painter.drawEllipse(25, 15, 25, 20)
-        painter.drawEllipse(35, 20, 20, 20)
-        painter.drawRect(15, 30, 35, 15)
+        # Draw cloud-like shape (coordinates scaled proportionally for larger size)
+        painter.drawEllipse(12, 25, 31, 25)  # Left cloud part
+        painter.drawEllipse(31, 19, 31, 25)  # Middle cloud part
+        painter.drawEllipse(44, 25, 25, 25)  # Right cloud part
+        painter.drawRect(19, 38, 44, 19)     # Bottom rectangle
         
         painter.end()
         return QIcon(pixmap)
@@ -310,53 +310,101 @@ Status: {self.sync_engine.get_status().value.title()}"""
         """Run the system tray application"""
         logger.info("Starting system tray application...")
         
-        # Check if system tray is available
-        logger.info("Checking if system tray is available...")
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            logger.error("System tray is not available on this system")
-            QMessageBox.critical(
-                None,
-                "System Tray",
-                "System tray is not available on this system."
-            )
-            sys.exit(1)
-        
-        logger.info("System tray is available")
-        
-        # Try to start sync engine
-        logger.info("Attempting to start sync engine...")
-        sync_started = self.sync_engine.start()
-        logger.info(f"Sync engine start result: {sync_started}")
-        
-        if sync_started:
-            # Show initial notification if sync started successfully
-            logger.info("Sync engine started successfully")
-            if self.config.get_show_notifications():
-                logger.info("Showing success notification")
-                self.tray_icon.showMessage(
-                    "B2 Sync Started",
-                    f"Monitoring: {self.config.get_local_folder()}",
-                    QSystemTrayIcon.Information,
-                    3000
-                )
-        else:
-            # Show notification that configuration is needed
-            logger.info("Sync engine failed to start - showing configuration notification")
-            self.tray_icon.showMessage(
-                "B2 Sync - Configuration Required",
-                "Please configure your B2 credentials through Settings.",
-                QSystemTrayIcon.Warning,
-                5000
-            )
-            logger.warning("Sync engine failed to start - B2 credentials may be missing")
-        
-        # Run Qt event loop regardless of sync engine status
-        logger.info("Starting Qt event loop...")
         try:
-            logger.info("Entering app.exec_()...")
-            sys.exit(self.app.exec_())
-        except KeyboardInterrupt:
-            logger.info("Received keyboard interrupt")
+            # Check if system tray is available
+            logger.info("Checking if system tray is available...")
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                logger.error("System tray is not available on this system")
+                QMessageBox.critical(
+                    None,
+                    "System Tray",
+                    "System tray is not available on this system."
+                )
+                return
+            
+            logger.info("System tray is available")
+            
+            # Initialize the tray icon with error handling
+            try:
+                if not self.tray_icon.isVisible():
+                    self.tray_icon.show()
+                logger.info("System tray icon initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize system tray icon: {e}")
+                QMessageBox.critical(None, "System Tray Error", 
+                                   f"Failed to initialize system tray: {e}")
+                return
+            
+            # Try to start sync engine
+            logger.info("Attempting to start sync engine...")
+            sync_started = False
+            try:
+                sync_started = self.sync_engine.start()
+                logger.info(f"Sync engine start result: {sync_started}")
+            except Exception as e:
+                logger.error(f"Failed to start sync engine: {e}")
+                self._show_error("Sync Engine Error", f"Failed to start sync engine: {e}")
+                # Continue running even if sync engine fails to start
+            
             if sync_started:
-                self.sync_engine.stop()
-            self.app.quit()
+                # Show initial notification if sync started successfully
+                logger.info("Sync engine started successfully")
+                if self.config.get_show_notifications():
+                    logger.info("Showing success notification")
+                    self.tray_icon.showMessage(
+                        "B2 Sync Started",
+                        f"Monitoring: {self.config.get_local_folder()}",
+                        QSystemTrayIcon.Information,
+                        3000
+                    )
+            else:
+                # Show notification that configuration is needed
+                logger.info("Sync engine failed to start - showing configuration notification")
+                self.tray_icon.showMessage(
+                    "B2 Sync - Configuration Required",
+                    "Please configure your B2 credentials through Settings.",
+                    QSystemTrayIcon.Warning,
+                    5000
+                )
+                logger.warning("Sync engine failed to start - B2 credentials may be missing")
+            
+            # Run Qt event loop regardless of sync engine status
+            logger.info("Starting Qt event loop...")
+            try:
+                logger.info("Entering app.exec_()...")
+                sys.exit(self.app.exec_())
+            except KeyboardInterrupt:
+                logger.info("Received keyboard interrupt")
+                if sync_started:
+                    self.sync_engine.stop()
+                self.app.quit()
+                
+        except Exception as e:
+            logger.error(f"Critical system tray error: {e}", exc_info=True)
+            try:
+                self._show_error("Critical Error", f"Critical system tray error: {e}")
+            except:
+                # If we can't show error message, at least log it
+                logger.error("Failed to show error message dialog")
+        finally:
+            # Cleanup with error handling
+            try:
+                if hasattr(self, 'sync_engine') and self.sync_engine:
+                    logger.info("Stopping sync engine")
+                    self.sync_engine.stop()
+            except Exception as e:
+                logger.error(f"Error stopping sync engine: {e}")
+            
+            try:
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    logger.info("Hiding tray icon")
+                    self.tray_icon.hide()
+            except Exception as e:
+                logger.error(f"Error hiding tray icon: {e}")
+            
+            try:
+                if hasattr(self, 'app') and self.app:
+                    logger.info("Quitting application")
+                    self.app.quit()
+            except Exception as e:
+                logger.error(f"Error quitting application: {e}")

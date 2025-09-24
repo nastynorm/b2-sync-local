@@ -52,7 +52,8 @@ class ConfigManager:
             'local_folder': str(Path.home() / "B2Sync"),
             'sync_interval': '30',
             'auto_sync': 'true',
-            'sync_hidden_files': 'false'
+            'sync_hidden_files': 'false',
+            'sync_direction': 'bidirectional'
         }
         
         self.config['App'] = {
@@ -132,6 +133,17 @@ class ConfigManager:
     
     def set_sync_hidden_files(self, enabled: bool):
         self.config.set('Sync', 'sync_hidden_files', str(enabled))
+        self._save_config()
+    
+    def get_sync_direction(self) -> str:
+        return self.config.get('Sync', 'sync_direction', fallback='bidirectional')
+    
+    def set_sync_direction(self, direction: str):
+        """Set sync direction: 'bidirectional', 'upload_only', 'download_only'"""
+        valid_directions = ['bidirectional', 'upload_only', 'download_only']
+        if direction not in valid_directions:
+            raise ValueError(f"Invalid sync direction. Must be one of: {valid_directions}")
+        self.config.set('Sync', 'sync_direction', direction)
         self._save_config()
     
     # App Configuration
