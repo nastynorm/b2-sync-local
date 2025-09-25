@@ -48,6 +48,7 @@ Thumbs.db
 
 # Logs
 *.log
+debug_output.txt
 logs/
 
 # Configuration files with sensitive data
